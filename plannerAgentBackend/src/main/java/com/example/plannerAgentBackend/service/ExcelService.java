@@ -22,6 +22,10 @@ public class ExcelService {
 
     @Autowired
     private SolverService solverService;
+
+    @Autowired
+    private SolverExamService solverExamService;
+
     @Autowired
     private HallRepository hallRepo;
 
@@ -37,6 +41,20 @@ public class ExcelService {
             // Read "halls" sheet
             processHallSheet(workbook);
             solverService.runSolver();
+        }
+    }
+    public void saveExamExcelData(MultipartFile file) throws IOException {
+        if (file.isEmpty()) {
+            throw new IllegalArgumentException("File is empty");
+        }
+
+        try (Workbook workbook = new XSSFWorkbook(file.getInputStream())) {
+            // Read "module codes" sheet
+            processModuleSheet(workbook);
+
+            // Read "halls" sheet
+            processHallSheet(workbook);
+            solverExamService.runExamSolver();
         }
     }
 
