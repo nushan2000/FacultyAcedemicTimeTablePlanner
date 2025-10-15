@@ -61,9 +61,19 @@ public class SolverExamService {
                 ExamTableRecords result = new ExamTableRecords();
                 result.setCode(entry.get("code").asText());
                 result.setDay(entry.get("day").asText());
-                result.setHall(entry.get("hall").asText());
+
+                JsonNode hallsNode = entry.get("halls");
+                String hallsString = "";
+                if (hallsNode != null && hallsNode.isArray()) {
+                    List<String> hallList = new ArrayList<>();
+                    for (JsonNode hall : hallsNode) {
+                        hallList.add(hall.asText());
+                    }
+                    hallsString = String.join(", ", hallList); // e.g., "LT2, DO2, NLH1"
+                }
+                result.setHall(hallsString);
+
                 result.setSlot(entry.get("slot").asInt());
-//                result.setDuration(entry.get("duration").asInt());
                 result.setStudents(entry.get("students").asInt());
                 result.setDepartment(entry.get("department").asText());
                 result.setSemester(entry.get("semester").asInt());
@@ -71,8 +81,7 @@ public class SolverExamService {
                 results.add(result);
             }
 
-            // ✅ Save to database
-//            examSolverResultRepository.deleteAll();
+            examSolverResultRepository.deleteAll();
             examSolverResultRepository.saveAll(results);
 
             return "Solver executed successfully. " + results.size() + " records saved.";

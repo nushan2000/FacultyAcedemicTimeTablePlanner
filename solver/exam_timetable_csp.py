@@ -21,7 +21,7 @@ import json
 def load_data():
     file_path = "../data/planner_agent_data_nushan.xlsx"
     modules_df = pd.read_excel(file_path, sheet_name="module codes")
-    halls_df = pd.read_excel(file_path, sheet_name="halls")
+    halls_df = pd.read_excel(file_path, sheet_name="halls-exam")
 
     # Keep required columns; for exams we don't need duration
     modules_df = modules_df.dropna(subset=["module_code", "no_of_students"])
@@ -58,16 +58,15 @@ def build_exam_model(modules, halls, days, slots_per_day):
     num_slots = slots_per_day
     num_halls = len(halls)
 
-    # Int vars per module to easily read solution
+    # Int vars per module for day and slot only (no single hall var any more)
     module_vars = {}
     for m in modules:
         code = m["code"]
         dvar = model.NewIntVar(0, num_days - 1, f"day_{code}")
         svar = model.NewIntVar(0, num_slots - 1, f"slot_{code}")
-        hvar = model.NewIntVar(0, num_halls - 1, f"hall_{code}")
-        module_vars[code] = {"day": dvar, "slot": svar, "hall": hvar}
+        module_vars[code] = {"day": dvar, "slot": svar}
 
-    # presence[(code,d,s,h)] == True iff module code is scheduled at day d, slot s, hall h
+    # presence[(code,d,s,h)] == True iff module code uses hall h at day d, slot s
     presence = {}
     for m in modules:
         code = m["code"]
@@ -76,26 +75,57 @@ def build_exam_model(modules, halls, days, slots_per_day):
                 for h in range(num_halls):
                     p = model.NewBoolVar(f"pres_{code}_d{d}_s{s}_h{h}")
                     presence[(code, d, s, h)] = p
-                    # If p then day/slot/hall equal
+                    # If p then day/slot equal (link to module_vars)
                     model.Add(module_vars[code]["day"] == d).OnlyEnforceIf(p)
                     model.Add(module_vars[code]["slot"] == s).OnlyEnforceIf(p)
-                    model.Add(module_vars[code]["hall"] == h).OnlyEnforceIf(p)
 
-    # Exactly one presence per module (choose exactly one (d,s,h))
+    # assign_ds[(code,d,s)] == True iff module scheduled at day d & slot s (in >=1 hall)
+    assign_ds = {}
     for m in modules:
         code = m["code"]
-        pres_list = [presence[(code, d, s, h)] for d in range(num_days) for s in range(num_slots) for h in range(num_halls)]
-        model.AddExactlyOne(pres_list)
+        for d in range(num_days):
+            for s in range(num_slots):
+                a = model.NewBoolVar(f"assign_{code}_d{d}_s{s}")
+                assign_ds[(code, d, s)] = a
+                # If any presence for that (d,s) then assign_ds must be true
+                pres_over_halls = [presence[(code, d, s, h)] for h in range(num_halls)]
+                # presence -> assign_ds
+                for ph in pres_over_halls:
+                    model.AddImplication(ph, a)
+                # assign_ds -> at least one presence (i.e. module uses >=1 hall at that slot)
+                model.Add(sum(pres_over_halls) >= 1).OnlyEnforceIf(a)
+                # if not assigned then no presences
+                for ph in pres_over_halls:
+                    model.Add(ph == 0).OnlyEnforceIf(a.Not())
 
-    # Hall capacity: forbid presence where capacity < students
+    # Exactly one (day,slot) per module
+    for m in modules:
+        code = m["code"]
+        a_list = [assign_ds[(code, d, s)] for d in range(num_days) for s in range(num_slots)]
+        model.AddExactlyOne(a_list)
+        # Link assign_ds -> module_vars day/slot (redundant with presence->day/slot)
+        # but ensures day/slot values correspond even if solver picks day/slot ints directly.
+        for d in range(num_days):
+            for s in range(num_slots):
+                model.Add(module_vars[code]["day"] == d).OnlyEnforceIf(assign_ds[(code, d, s)])
+                model.Add(module_vars[code]["slot"] == s).OnlyEnforceIf(assign_ds[(code, d, s)])
+
+    # Hall capacity coverage: when a module is assigned at (d,s),
+    # sum(capacity[h] * presence) >= students
     for m in modules:
         code = m["code"]
         students = m["students"]
         for d in range(num_days):
             for s in range(num_slots):
-                for h_idx, hall in enumerate(halls):
-                    if hall["capacity"] < students:
-                        model.Add(presence[(code, d, s, h_idx)] == 0)
+                pres_over_halls = [presence[(code, d, s, h)] for h in range(num_halls)]
+                # Build linear expr sum(capacity * pres)
+                coeffs = [halls[h]["capacity"] for h in range(num_halls)]
+                # Add conditional capacity constraint only when assign_ds is true
+                # sum(capacity[h] * pres_over_halls[h]) >= students  if assign_ds[(code,d,s)]
+                # CP-SAT requires building a linear expression and using OnlyEnforceIf on the constraint.
+                model.Add(
+                    sum(coeffs[h] * pres_over_halls[h] for h in range(num_halls)) >= students
+                ).OnlyEnforceIf(assign_ds[(code, d, s)])
 
     # At most one exam per hall per (day, slot)
     for d in range(num_days):
@@ -104,21 +134,8 @@ def build_exam_model(modules, halls, days, slots_per_day):
                 pres_list = [presence[(m["code"], d, s, h_idx)] for m in modules]
                 model.Add(sum(pres_list) <= 1)
 
-    # Build dp[(code,d,s)] : module scheduled at day d & slot s (in any hall)
-    dp = {}
-    for m in modules:
-        code = m["code"]
-        for d in range(num_days):
-            for s in range(num_slots):
-                var = model.NewBoolVar(f"dp_{code}_d{d}_s{s}")
-                dp[(code, d, s)] = var
-                pres_over_halls = [presence[(code, d, s, h)] for h in range(num_halls)]
-                # var == OR(pres_over_halls)
-                # If var true then at least one presence true
-                model.AddBoolOr(pres_over_halls).OnlyEnforceIf(var)
-                # If var false then all pres false
-                for ph in pres_over_halls:
-                    model.Add(ph == 0).OnlyEnforceIf(var.Not())
+    # For the soft objective we can reuse assign_ds as dp[(code,d,s)]
+    dp = assign_ds  # rename for clarity in rest of your code
 
     # Soft objective: minimize same-department overlaps at same day+slot
     overlap_vars = []
@@ -132,81 +149,28 @@ def build_exam_model(modules, halls, days, slots_per_day):
 
     for dept, mod_list in dept_map.items():
         n = len(mod_list)
-        # For each unordered pair of modules in the same dept
         for i in range(n):
             for j in range(i + 1, n):
                 mi = mod_list[i]["code"]
                 mj = mod_list[j]["code"]
-                # If you prefer to only penalize same-semester overlaps, add check here using module's semester
                 for d in range(num_days):
                     for s in range(num_slots):
                         ov = model.NewBoolVar(f"ov_{dept}_{mi}_{mj}_d{d}_s{s}")
                         overlap_vars.append(ov)
                         dpi = dp[(mi, d, s)]
                         dpj = dp[(mj, d, s)]
-                        # ov -> dpi and ov -> dpj
                         model.AddImplication(ov, dpi)
                         model.AddImplication(ov, dpj)
-                        # dpi and dpj -> ov  (equivalently: not(dpi and dpj) or ov)
                         model.AddBoolOr([dpi.Not(), dpj.Not(), ov])
 
-    # Objective: minimize total overlaps (soft)
+    # Objective: minimize overlaps if any
     if overlap_vars:
         model.Minimize(sum(overlap_vars))
-    else:
-        # no department info -> no objective, just find a feasible solution
-        pass
 
     return model, module_vars, presence, dp
 
-# ----------------------------
-# Diagnostics & printing
-# ----------------------------
-# def print_diagnostics(modules, halls, days, slots_per_day):
-#     print("\n[DIAGNOSTICS]")
-#     print(f"  Number of modules: {len(modules)}")
-#     print(f"  Days (slots): {len(days)} days, {slots_per_day} slots/day")
-#     print(f"  Halls: {len(halls)}")
-#     total_avail = len(days) * slots_per_day * len(halls)
-#     print(f"  Total available exam slots (day*slot*hall): {total_avail}")
-#     if halls:
-#         print(f"  Largest hall capacity: {max(h['capacity'] for h in halls)}")
-#     if modules:
-#         print(f"  Largest class size: {max(m['students'] for m in modules)}")
 
-# def print_timetable_grid(solver, module_vars, modules, halls, days, slots_per_day):
-#     print("\nTIMETABLE (Day x Slot x Hall):")
-#     header = "Day/Slot".ljust(12)
-#     for h in halls:
-#         header += f"{h['hall']:<18}"
-#     print(header)
-#     print("-" * (12 + 18 * len(halls)))
-#     for d_idx, dname in enumerate(days):
-#         for s in range(slots_per_day):
-#             row = f"{dname}-{s}".ljust(12)
-#             for h_idx, h in enumerate(halls):
-#                 entry = "-"
-#                 for m in modules:
-#                     code = m["code"]
-#                     if solver.Value(module_vars[code]["day"]) == d_idx and \
-#                        solver.Value(module_vars[code]["slot"]) == s and \
-#                        solver.Value(module_vars[code]["hall"]) == h_idx:
-#                         entry = code
-#                         break
-#                 row += f"{entry:<18}"
-#             print(row)
-#         print("-" * (12 + 18 * len(halls)))
-
-# def print_slot_expanded(solver, module_vars, modules, halls, days):
-#     print("\nAll scheduled exams (expanded view):")
-#     for m in modules:
-#         code = m["code"]
-#         d = solver.Value(module_vars[code]["day"])
-#         s = solver.Value(module_vars[code]["slot"])
-#         h = solver.Value(module_vars[code]["hall"])
-#         print(f"{code}: Day={days[d]}, Slot={s}, Hall={halls[h]['hall']}, Students={m['students']}, Dept={m.get('department')}")
-
-def generate_exam_json(status, solver, module_vars, modules, halls, days):
+def generate_exam_json(status, solver, module_vars, modules, halls, days, presence):
     result = {
         "status": "INFEASIBLE" if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE) else "OPTIMAL",
         "timetable": []
@@ -219,13 +183,35 @@ def generate_exam_json(status, solver, module_vars, modules, halls, days):
         code = m["code"]
         d = solver.Value(module_vars[code]["day"])
         s = solver.Value(module_vars[code]["slot"])
-        h = solver.Value(module_vars[code]["hall"])
+
+        # collect all halls used for this module at (d,s)
+        hall_list = []
+        for h_idx in range(len(halls)):
+            if solver.Value(presence[(code, d, s, h_idx)]) == 1:
+                hall_list.append(halls[h_idx])
+
+        # distribute students among halls proportionally to capacity
+        total_students = m["students"]
+        distributed_students = []
+        if hall_list:
+            total_capacity = sum(h["capacity"] for h in hall_list)
+            remaining_students = total_students
+            for i, h in enumerate(hall_list):
+                if i < len(hall_list) - 1:
+                    # proportional allocation
+                    allocated = min(remaining_students, int(total_students * h["capacity"] / total_capacity))
+                    remaining_students -= allocated
+                else:
+                    # last hall gets remaining students
+                    allocated = remaining_students
+                distributed_students.append(f"{h['hall']}-{allocated}")
+
         entry = {
             "code": code,
             "day": days[d],
             "slot": int(s),
-            "hall": halls[h]["hall"],
-            "students": m["students"],
+            "halls": [dstr for dstr in distributed_students],  # AUDI-200, AUDI2-27
+            "students": total_students,
             "department": m.get("department"),
             "semester": m.get("semester"),
             "iscommon": m.get("iscommon", False)
@@ -233,6 +219,8 @@ def generate_exam_json(status, solver, module_vars, modules, halls, days):
         result["timetable"].append(entry)
 
     return result
+
+
 
 # ----------------------------
 # Solve
@@ -250,8 +238,8 @@ def solve_model(model, time_limit_seconds=60, workers=8):
 import json
 def main():
     # 2 weeks (14 days)
-    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun",
-            "Mon2", "Tue2", "Wed2", "Thu2", "Fri2", "Sat2", "Sun2"]
+    days = ["day1", "day2", "day3", "day4", "day5", "day6", "day7",
+            "day8", "day9", "day10", "day11", "day12", "day13", "day14"]
     slots_per_day = 2  # two exam slots per day (morning, afternoon)
 
     modules, halls = load_data()
@@ -263,7 +251,7 @@ def main():
     status, solver = solve_model(model, time_limit_seconds=60, workers=8)
 
     # Produce JSON and prints
-    result_json = generate_exam_json(status, solver, module_vars, modules, halls, days)
+    result_json = generate_exam_json(status, solver, module_vars, modules, halls, days, presence)
  
 
     print(json.dumps(result_json))

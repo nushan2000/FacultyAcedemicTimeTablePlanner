@@ -1,5 +1,6 @@
 package com.example.plannerAgentBackend.controller;
 
+import com.example.plannerAgentBackend.model.ExamTableRecords;
 import com.example.plannerAgentBackend.model.SolverResult;
 import com.example.plannerAgentBackend.service.SolverExamService;
 import com.example.plannerAgentBackend.service.SolverService;
@@ -38,5 +39,9 @@ public class SolverController {
     @GetMapping("/solver-results")
     public ResponseEntity<List<SolverResult>> getAllSolverResults() throws Exception {
         return ResponseEntity.ok(solverService.getAllSolverResults());
+    }
+    @GetMapping("/solver-exam-results")
+    public ResponseEntity<List<ExamTableRecords>> getAllExamSolverResults() throws Exception {
+        return ResponseEntity.ok(solverExamService.getAllExamTableRecords());
     }
 }
