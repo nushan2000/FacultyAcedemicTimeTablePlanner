@@ -14,7 +14,6 @@ Exam timetable solver (converted from academic timetable)
 import pandas as pd
 from ortools.sat.python import cp_model
 import json
-import math
 
 # ----------------------------
 # 1. LOAD DATA
@@ -23,7 +22,6 @@ def load_data():
     file_path = "../data/planner_agent_data_nushan.xlsx"
     modules_df = pd.read_excel(file_path, sheet_name="module codes")
     halls_df = pd.read_excel(file_path, sheet_name="halls-exam")
-
 
     # Keep required columns; for exams we don't need duration
     modules_df = modules_df.dropna(subset=["module_code", "no_of_students"])
@@ -59,28 +57,25 @@ def build_exam_model(modules, halls, days, slots_per_day):
     num_days = len(days)
     num_slots = slots_per_day
     num_halls = len(halls)
-    
 
-
-    # --- compute semester -> preferred slot (soft preference) ---
-    semester_to_slot = {}
     semesters = sorted({m["semester"] for m in modules if m.get("semester") is not None})
+    semester_to_slot = {}
     if semesters:
-        # n_sem = len(semesters)
-        # use ceil to distribute semesters evenly across slots
-        for sem in semesters:
-            semester_to_slot[sem] = (sem % 2) - 1 if sem % 2 == 0 else 0
- 
+        # Example: 4 semesters → 2 slots  → 1&2 in slot 0, 3&4 in slot 1
+        n_sem = len(semesters)
+        group_size = max(1, n_sem // slots_per_day)
+
+        for idx, sem in enumerate(semesters):
+            slot_idx = min(slots_per_day - 1, idx // group_size)
+            semester_to_slot[sem] = slot_idx
     # Int vars per module for day and slot only (no single hall var any more)
     module_vars = {}
-    # semester_penalties = []   # collect bools that indicate "violated preferred slot"
     for m in modules:
         code = m["code"]
         dvar = model.NewIntVar(0, num_days - 1, f"day_{code}")
         svar = model.NewIntVar(0, num_slots - 1, f"slot_{code}")
         module_vars[code] = {"day": dvar, "slot": svar}
-
-        # if semester has a preferred slot, add a soft penalty (can be broken)
+        
         sem = m.get("semester")
         if sem in semester_to_slot:
             model.Add(svar == semester_to_slot[sem])

@@ -44,6 +44,7 @@ def load_data():
         halls.append({
             "hall": row["room_name"],
             "capacity": int(row["capacity"]),
+            "department": row.get("department", None)
         })
 
     return modules, halls
@@ -112,6 +113,16 @@ def build_model(modules, halls, days, slots_per_day):
             if hall["capacity"] < m["students"]:
                 for d in range(len(days)):
                     model.Add(presence_vars[(code, d, h_idx)] == 0)
+            
+                    # --- Department-based hall restriction (hard)
+            hall_dept = str(hall.get("department", "")).strip().lower()
+            module_dept = str(m.get("department", "")).strip().lower()
+
+        # If hall is NOT common and departments don't match → disallow
+            if hall_dept != "common" and hall_dept != module_dept:
+                for d in range(len(days)):
+                    model.Add(presence_vars[(code, d, h_idx)] == 0)
+
 
     # --- Day-presence variable for each module+day
     day_presence = {}  # (code, day_idx) -> Bool
