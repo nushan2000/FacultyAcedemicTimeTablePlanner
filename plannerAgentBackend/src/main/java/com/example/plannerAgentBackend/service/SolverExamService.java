@@ -23,21 +23,35 @@ public class SolverExamService {
 
     public String runExamSolver() {
         try {
-            // ✅ Run Python script
-            ProcessBuilder pb = new ProcessBuilder("python", "D:/8th/FYP/plannerAgent/solver/exam_timetable_csp.py");
+            // Run Python script
+            ProcessBuilder pb = new ProcessBuilder(
+                    "python",
+                    "D:\\7th\\FinalYearProject\\development\\AllSections\\AI-Assistance-FOE\\backend-Planner\\solver\\exam_timetable_csp2.py"
+            );
+
+// Merge stderr into stdout so you can catch errors
             pb.redirectErrorStream(true);
-            pb.directory(new File("D:/8th/FYP/plannerAgent/solver")); // ensure correct working directory
+
+// Set working directory to the 7th semester folder
+            pb.directory(new File("D:\\7th\\FinalYearProject\\development\\AllSections\\AI-Assistance-FOE\\backend-Planner\\solver"));
+
+// Start the process
             Process process = pb.start();
 
+
+            // Read Python output in real time
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             StringBuilder output = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
+                // Print Python script output
+                System.out.println(line);
                 output.append(line).append("\n");
             }
 
             process.waitFor();
-            System.out.println(output.toString());
+
+            // Extract JSON from Python output
             Pattern pattern = Pattern.compile("\\{.*\\}", Pattern.DOTALL);
             Matcher matcher = pattern.matcher(output.toString());
             if (!matcher.find()) {
@@ -46,7 +60,7 @@ public class SolverExamService {
 
             String jsonOutput = matcher.group(0);
 
-            // ✅ Parse JSON
+            // Parse JSON and save to database
             ObjectMapper mapper = new ObjectMapper();
             JsonNode root = mapper.readTree(jsonOutput);
 
@@ -69,7 +83,7 @@ public class SolverExamService {
                     for (JsonNode hall : hallsNode) {
                         hallList.add(hall.asText());
                     }
-                    hallsString = String.join(", ", hallList); // e.g., "LT2, DO2, NLH1"
+                    hallsString = String.join(", ", hallList);
                 }
                 result.setHall(hallsString);
 
@@ -78,6 +92,9 @@ public class SolverExamService {
                 result.setDepartment(entry.get("department").asText());
                 result.setSemester(entry.get("semester").asInt());
                 result.setCommon(entry.get("iscommon").asBoolean());
+                JsonNode nameNode = entry.get("name");
+                result.setName(nameNode != null ? nameNode.asText() : "");
+
                 results.add(result);
             }
 

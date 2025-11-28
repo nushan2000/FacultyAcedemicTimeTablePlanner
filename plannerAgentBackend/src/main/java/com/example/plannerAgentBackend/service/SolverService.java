@@ -23,7 +23,7 @@ public class SolverService {
     public String runSolver() {
         try {
             // Run Python script
-            ProcessBuilder pb = new ProcessBuilder("python", "D:/8th/FYP/plannerAgent/solver/timetable_csp.py");
+            ProcessBuilder pb = new ProcessBuilder("python", "D:/7th/FinalYearProject/development/AllSections/AI-Assistance-FOE/backend-Planner/solver/timetable_csp.py");
             pb.redirectErrorStream(true);
             Process process = pb.start();
 

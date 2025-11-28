@@ -9,7 +9,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 @Entity
-@Table(name="examTimes")
+@Table(name="exam_times")
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -28,5 +28,6 @@ public class ExamTableRecords {
     private String department;
     private int semester;
     private boolean isCommon;
+    private String name;
 
 }
